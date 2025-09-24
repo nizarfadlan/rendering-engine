@@ -25,6 +25,14 @@ impl RenderingEngine {
                 OsStr::new("--disable-setuid-sandbox"),
                 OsStr::new("--disable-dev-shm-usage"),
                 OsStr::new("--disable-gpu"),
+                OsStr::new("--disable-software-rasterizer"),
+                OsStr::new("--disable-extensions"),
+                OsStr::new("--disable-background-networking"),
+                OsStr::new("--disable-sync"),
+                OsStr::new("--metrics-recording-only"),
+                OsStr::new("--mute-audio"),
+                OsStr::new("--no-first-run"),
+                OsStr::new("--disable-default-apps"),
             ])
             .build()
             .map_err(|_| anyhow!("Could not find Chrome/Chromium binary"))?;
@@ -42,14 +50,17 @@ impl RenderingEngine {
 
         // Check if browser exists and is alive
         if let Some(ref browser) = *browser_lock {
-            // Try to get tabs to check if browser is still alive
-            if let Ok(_) = browser.new_tab() {
-                return Ok(browser.clone());
+            match browser.new_tab() {
+                Ok(tab) => {
+                    // Close test tab immediately
+                    let _ = tab.close(true);
+                    return Ok(browser.clone());
+                }
+                Err(_) => {
+                    tracing::warn!("Browser health check failed, recreating");
+                    *browser_lock = None;
+                }
             }
-
-            // Browser is dead, log and clear
-            tracing::warn!("Browser health check failed, will recreate");
-            *browser_lock = None;
         }
 
         // Browser is dead or doesn't exist, create new one
@@ -85,12 +96,32 @@ impl RenderingEngine {
         let tab = browser.new_tab()?;
 
         // Set viewport
+        let scale_factor = request.options.device_scale_factor.unwrap_or(1.0);
         tab.set_bounds(headless_chrome::types::Bounds::Normal {
             left: Some(0),
             top: Some(0),
             width: Some(request.options.width as f64),
             height: Some(request.options.height as f64),
         })?;
+
+        if scale_factor != 1.0 {
+            tab.call_method(headless_chrome::protocol::cdp::Emulation::SetDeviceMetricsOverride {
+                width: request.options.width,
+                height: request.options.height,
+                device_scale_factor: scale_factor,
+                mobile: false,
+                scale: Some(scale_factor),
+                screen_width: Some(request.options.width),
+                screen_height: Some(request.options.height),
+                position_x: Some(0),
+                position_y: Some(0),
+                dont_set_visible_size: None,
+                screen_orientation: None,
+                viewport: None,
+                display_feature: None,
+                 device_posture: None,
+            })?;
+        }
 
         // Navigate to HTML
         let data_url = format!(
@@ -112,9 +143,10 @@ impl RenderingEngine {
 
         // Wait for render ready signal
         let mut attempts = 0;
-        let max_attempts = 50;
+        const MAX_ATTEMPTS: u32 = 50;
+        const POLL_INTERVAL_MS: u64 = 100;
 
-        while attempts < max_attempts {
+        while attempts < MAX_ATTEMPTS {
             let ready: bool = tab
                 .evaluate("window.renderReady === true", false)?
                 .value
@@ -134,11 +166,11 @@ impl RenderingEngine {
                 return Err(anyhow!("Render initialization failed: {}", err));
             }
 
-            sleep(Duration::from_millis(100));
+            sleep(Duration::from_millis(POLL_INTERVAL_MS));
             attempts += 1;
         }
 
-        if attempts >= max_attempts {
+        if attempts >= MAX_ATTEMPTS {
             return Err(anyhow!("Timeout waiting for render to complete"));
         }
 
@@ -171,6 +203,8 @@ impl RenderingEngine {
                 return Err(anyhow!("Unsupported format: {}", request.options.format));
             }
         };
+
+        let _ = tab.close(true);
 
         Ok(result)
     }

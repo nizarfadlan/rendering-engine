@@ -19,9 +19,14 @@ pub fn generate_html(request: &RenderRequest) -> Result<String> {
 
     let data_json = serde_json::to_string(&request.data)?;
 
+    let data_json_escaped = data_json
+        .replace('\\', "\\\\")
+        .replace('`', "\\`")
+        .replace("${", "\\${");
+
     let init_script = library_template
         .init_script
-        .replace("{data}", &data_json)
+        .replace("{data}", &data_json_escaped)
         .replace("{width}", &request.options.width.to_string())
         .replace("{height}", &request.options.height.to_string());
 
@@ -30,6 +35,8 @@ pub fn generate_html(request: &RenderRequest) -> Result<String> {
     } else {
         ""
     };
+
+    let device_pixel_ratio = request.options.device_scale_factor.unwrap_or(1.0);
 
     let html = format!(
         r#"<!DOCTYPE html>
@@ -65,6 +72,9 @@ pub fn generate_html(request: &RenderRequest) -> Result<String> {
         {}
     </div>
 
+    <script>
+        window.devicePixelRatio = {};
+    </script>
     <script src="{}"></script>
 
     <script>
@@ -85,6 +95,7 @@ pub fn generate_html(request: &RenderRequest) -> Result<String> {
         request.options.width,
         request.options.height,
         canvas_element,
+        device_pixel_ratio,
         cdn_url,
         init_script
     );
