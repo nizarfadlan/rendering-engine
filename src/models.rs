@@ -36,6 +36,7 @@ pub struct RenderOptions {
     pub height: u32,
 
     /// Output format (png, jpeg, pdf)
+    #[oai(validator(pattern = "^(png|jpeg|jpg|pdf)$"))]
     pub format: String,
 
     /// Image quality for JPEG (1-100)
@@ -43,5 +44,6 @@ pub struct RenderOptions {
     pub quality: Option<u8>,
 
     /// Device scale factor for high-DPI displays
+    #[oai(validator(minimum(value = "0.5"), maximum(value = "3.0")))]
     pub device_scale_factor: Option<f64>,
 }
