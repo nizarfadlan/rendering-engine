@@ -122,6 +122,8 @@ impl RenderApi {
 async fn main() -> Result<(), std::io::Error> {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
+        .with_target(false)
+        .with_thread_ids(true)
         .init();
 
     tracing::info!("Initializing Rendering Service...");
