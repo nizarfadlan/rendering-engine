@@ -14,8 +14,10 @@ use crate::core::registry::LIBRARY_REGISTRY;
 use crate::core::template;
 use crate::schemas::render::{Base64Response, RenderRequest};
 
-const DEFAULT_POOL_SIZE: usize = 1;
+const MIN_POOL_SIZE: usize = 1;
+const MAX_POOL_SIZE: usize = 10;
 const MAX_CONCURRENT_RENDERS: usize = 20;
+const SCALE_UP_THRESHOLD: f32 = 0.8; // Scale up when 80% capacity used
 
 #[derive(Debug, Clone)]
 pub struct HealthStatus {
@@ -98,15 +100,16 @@ impl Drop for BrowserPoolGuard {
 struct BrowserPool {
     pool: ArrayQueue<Arc<BrowserInstance>>,
     launch_options: LaunchOptions<'static>,
-    size: usize,
+    max_size: usize,
+    current_size: Arc<RwLock<usize>>,
 }
 
 impl BrowserPool {
-    fn new(size: usize, launch_options: LaunchOptions<'static>) -> Result<Self> {
-        let pool = ArrayQueue::new(size);
+    fn new(min_size: usize, max_size: usize, launch_options: LaunchOptions<'static>) -> Result<Self> {
+        let pool = ArrayQueue::new(max_size);
 
-        // Pre-populate pool
-        for i in 0..size {
+        // Start with minimum pool size
+        for i in 0..min_size {
             match BrowserInstance::new(&launch_options) {
                 Ok(instance) => {
                     if pool.push(Arc::new(instance)).is_err() {
@@ -123,20 +126,25 @@ impl BrowserPool {
             return Err(anyhow!("Failed to initialize browser pool"));
         }
 
+        let initial_count = pool.len();
+
         tracing::info!(
-            "Browser pool initialized with {}/{} instances",
-            pool.len(),
-            size
+            "Browser pool initialized with {}/{} instances (max: {})",
+            initial_count,
+            min_size,
+            max_size
         );
 
         Ok(Self {
             pool,
             launch_options,
-            size,
+            max_size,
+            current_size: Arc::new(RwLock::new(initial_count)),
         })
     }
 
     fn acquire(&self) -> Result<Arc<BrowserInstance>> {
+        // Try to get from pool first
         if let Some(instance) = self.pool.pop() {
             if instance.is_healthy() {
                 return Ok(instance);
@@ -145,7 +153,34 @@ impl BrowserPool {
             }
         }
 
-        tracing::debug!("Creating temporary browser instance (pool exhausted or unhealthy)");
+        // Check if we should scale up the pool
+        let current = *self.current_size.read();
+        let available = self.pool.len();
+        let usage_ratio = 1.0 - (available as f32 / current as f32);
+
+        if usage_ratio >= SCALE_UP_THRESHOLD && current < self.max_size {
+            let new_size = (current + 1).min(self.max_size);
+            tracing::info!(
+                "Scaling up browser pool: {} -> {} (usage: {:.1}%)",
+                current,
+                new_size,
+                usage_ratio * 100.0
+            );
+
+            match BrowserInstance::new(&self.launch_options) {
+                Ok(new_instance) => {
+                    let instance = Arc::new(new_instance);
+                    *self.current_size.write() = new_size;
+                    return Ok(instance);
+                }
+                Err(e) => {
+                    tracing::error!("Failed to scale up pool: {}", e);
+                }
+            }
+        }
+
+        // Fallback: create temporary instance
+        tracing::debug!("Creating temporary browser instance (pool exhausted)");
         BrowserInstance::new(&self.launch_options).map(Arc::new)
     }
 
@@ -160,7 +195,7 @@ impl BrowserPool {
     }
 
     fn current_size(&self) -> usize {
-        self.pool.len()
+        *self.current_size.read()
     }
 }
 
@@ -172,10 +207,10 @@ pub struct RenderingEngine {
 
 impl RenderingEngine {
     pub fn new() -> Result<Self> {
-        Self::with_config(DEFAULT_POOL_SIZE, MAX_CONCURRENT_RENDERS)
+        Self::with_config(MIN_POOL_SIZE, MAX_POOL_SIZE, MAX_CONCURRENT_RENDERS)
     }
 
-    pub fn with_config(pool_size: usize, max_concurrent: usize) -> Result<Self> {
+    pub fn with_config(min_pool_size: usize, max_pool_size: usize, max_concurrent: usize) -> Result<Self> {
         let launch_options = LaunchOptions::default_builder()
             .headless(true)
             .sandbox(false)
@@ -196,7 +231,7 @@ impl RenderingEngine {
             .build()
             .map_err(|_| anyhow!("Could not find Chrome/Chromium binary"))?;
 
-        let browser_pool = BrowserPool::new(pool_size, launch_options)?;
+        let browser_pool = BrowserPool::new(min_pool_size, max_pool_size, launch_options)?;
         let render_semaphore = Semaphore::new(max_concurrent);
 
         Ok(Self {
@@ -404,7 +439,7 @@ impl RenderingEngine {
     pub fn health_check(&self) -> HealthStatus {
         HealthStatus {
             pool_size: self.browser_pool.current_size(),
-            total_capacity: self.browser_pool.size,
+            total_capacity: self.browser_pool.max_size,
             available_permits: self.render_semaphore.available_permits(),
             max_concurrent: MAX_CONCURRENT_RENDERS,
         }

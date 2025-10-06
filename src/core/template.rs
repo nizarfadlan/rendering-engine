@@ -69,7 +69,7 @@ pub fn generate_html(request: &RenderRequest) -> Result<String> {
 
     <script>
         window.devicePixelRatio = {};
-        const dataJson = {};
+        const dataJson = '{}';
     </script>
     <script src="{}"></script>
 
@@ -92,7 +92,7 @@ pub fn generate_html(request: &RenderRequest) -> Result<String> {
         request.options.height,
         canvas_element,
         device_pixel_ratio,
-        data_json,
+        data_json.replace('\'', "\\'").replace('\n', "\\n"),
         cdn_url,
         init_script
     );
