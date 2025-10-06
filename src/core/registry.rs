@@ -14,13 +14,15 @@ pub static LIBRARY_REGISTRY: Lazy<HashMap<String, LibraryTemplate>> = Lazy::new(
     registry.insert(
         "apache-echarts".to_string(),
         LibraryTemplate {
-            cdn_url: "https://cdn.jsdelivr.net/npm/echarts@{version}/dist/echarts.min.js".to_string(),
+            cdn_url: "https://cdn.jsdelivr.net/npm/echarts@{version}/dist/echarts.min.js"
+                .to_string(),
             wait_selector: "#render-container".to_string(),
             init_script: r#"
                 const chart = echarts.init(document.getElementById('render-container'));
                 chart.setOption({data});
                 window.renderReady = true;
-            "#.to_string(),
+            "#
+            .to_string(),
         },
     );
 
@@ -28,13 +30,15 @@ pub static LIBRARY_REGISTRY: Lazy<HashMap<String, LibraryTemplate>> = Lazy::new(
     registry.insert(
         "chartjs".to_string(),
         LibraryTemplate {
-            cdn_url: "https://cdn.jsdelivr.net/npm/chart.js@{version}/dist/chart.umd.js".to_string(),
+            cdn_url: "https://cdn.jsdelivr.net/npm/chart.js@{version}/dist/chart.umd.js"
+                .to_string(),
             wait_selector: "#chart-canvas".to_string(),
             init_script: r#"
                 const ctx = document.getElementById('chart-canvas').getContext('2d');
                 new Chart(ctx, {data});
                 window.renderReady = true;
-            "#.to_string(),
+            "#
+            .to_string(),
         },
     );
 
@@ -63,7 +67,8 @@ pub static LIBRARY_REGISTRY: Lazy<HashMap<String, LibraryTemplate>> = Lazy::new(
 
                 layer.draw();
                 window.renderReady = true;
-            "#.to_string(),
+            "#
+            .to_string(),
         },
     );
 
@@ -84,7 +89,36 @@ pub static LIBRARY_REGISTRY: Lazy<HashMap<String, LibraryTemplate>> = Lazy::new(
                 stage.height({height});
 
                 window.renderReady = true;
-            "#.to_string(),
+            "#
+            .to_string(),
+        },
+    );
+
+    // SolidJS (CDN approach)
+    registry.insert(
+        "solidjs".to_string(),
+        LibraryTemplate {
+            cdn_url: "https://cdn.jsdelivr.net/npm/solid-js@{version}/dist/solid.js".to_string(),
+            wait_selector: "#render-container".to_string(),
+            init_script: r#"
+                // This will be handled by custom template
+                window.renderReady = true;
+            "#
+            .to_string(),
+        },
+    );
+
+    // SolidJS (Node.js SSR approach)
+    registry.insert(
+        "solidjs-node".to_string(),
+        LibraryTemplate {
+            cdn_url: "".to_string(), // No CDN needed for Node.js approach
+            wait_selector: "#render-container".to_string(),
+            init_script: r#"
+                // Rendered via Node.js SSR
+                window.renderReady = true;
+            "#
+            .to_string(),
         },
     );
     // Add more libraries as needed

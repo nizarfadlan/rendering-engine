@@ -1,1 +1,9 @@
+# Binaries
 /target
+
+# Logs
+/logs
+
+# Env
+.env.*
+!.env.example
