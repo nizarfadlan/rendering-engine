@@ -23,22 +23,6 @@ async fn main() {
     let config = get_config();
     tracing::info!("run with config: {:?}", config);
 
-    let pool_size = std::env::var("BROWSER_POOL_SIZE")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(4);
-
-    let max_concurrent = std::env::var("MAX_CONCURRENT_RENDERS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(20);
-
-    tracing::info!(
-        "Initializing browser pool: size={}, max_concurrent={}",
-        pool_size,
-        max_concurrent
-    );
-
     let engine = Arc::new(RenderingEngine::new().expect("Failed to initialize rendering engine"));
 
     // Init App State

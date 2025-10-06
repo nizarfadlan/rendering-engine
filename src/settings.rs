@@ -8,7 +8,7 @@ pub struct Config {
     pub env: String, // file / server
     pub host: String,
     pub port: u16,
-    pub prefix: Option<String>,
+    pub prefix: Option<String>
 }
 
 pub fn get_config() -> Config {
