@@ -117,4 +117,23 @@ impl ApiRender {
 
         ListLibrariesResponse::Ok(Json(libraries))
     }
+
+    #[oai(path = "/health", method = "get")]
+    async fn health(&self, state: Data<&Arc<AppState>>) -> Json<serde_json::Value> {
+        let status = state.engine.health_check();
+
+        Json(serde_json::json!({
+            "status": "healthy",
+            "browser_pool": {
+                "available": status.pool_size,
+                "capacity": status.total_capacity,
+                "utilization_pct": ((status.total_capacity - status.pool_size) as f64 / status.total_capacity as f64 * 100.0)
+            },
+            "render_slots": {
+                "available": status.available_permits,
+                "capacity": status.max_concurrent,
+                "utilization_pct": ((status.max_concurrent - status.available_permits) as f64 / status.max_concurrent as f64 * 100.0)
+            }
+        }))
+    }
 }
