@@ -221,7 +221,6 @@ impl RenderingEngine {
         let library_name = request.library.name.clone();
         let format = request.options.format.clone();
 
-
         let engine = self.clone();
         let start = Instant::now();
 
