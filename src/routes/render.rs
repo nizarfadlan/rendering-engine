@@ -69,12 +69,14 @@ impl ApiRender {
                 Ok(res) => res,
                 Err(e) => {
                     tracing::error!("Render error: {}", e);
-                    return RenderResponse::InternalServerError(Json(InternalServerErrorResponse::new(
-                        "route.render",
-                        "render",
-                        "Rendering failed",
-                        &e.to_string(),
-                    )));
+                    return RenderResponse::InternalServerError(Json(
+                        InternalServerErrorResponse::new(
+                            "route.render",
+                            "render",
+                            "Rendering failed",
+                            &e.to_string(),
+                        ),
+                    ));
                 }
             };
 
@@ -84,12 +86,14 @@ impl ApiRender {
                 Ok(res) => res,
                 Err(e) => {
                     tracing::error!("Render error: {}", e);
-                    return RenderResponse::InternalServerError(Json(InternalServerErrorResponse::new(
-                        "route.render",
-                        "render",
-                        "Rendering failed",
-                        &e.to_string(),
-                    )));
+                    return RenderResponse::InternalServerError(Json(
+                        InternalServerErrorResponse::new(
+                            "route.render",
+                            "render",
+                            "Rendering failed",
+                            &e.to_string(),
+                        ),
+                    ));
                 }
             };
 

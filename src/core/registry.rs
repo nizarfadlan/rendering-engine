@@ -94,34 +94,5 @@ pub static LIBRARY_REGISTRY: Lazy<HashMap<String, LibraryTemplate>> = Lazy::new(
         },
     );
 
-    // SolidJS (CDN approach)
-    registry.insert(
-        "solidjs".to_string(),
-        LibraryTemplate {
-            cdn_url: "https://cdn.jsdelivr.net/npm/solid-js@{version}/dist/solid.js".to_string(),
-            wait_selector: "#render-container".to_string(),
-            init_script: r#"
-                // This will be handled by custom template
-                window.renderReady = true;
-            "#
-            .to_string(),
-        },
-    );
-
-    // SolidJS (Node.js SSR approach)
-    registry.insert(
-        "solidjs-node".to_string(),
-        LibraryTemplate {
-            cdn_url: "".to_string(), // No CDN needed for Node.js approach
-            wait_selector: "#render-container".to_string(),
-            init_script: r#"
-                // Rendered via Node.js SSR
-                window.renderReady = true;
-            "#
-            .to_string(),
-        },
-    );
-    // Add more libraries as needed
-
     registry
 });

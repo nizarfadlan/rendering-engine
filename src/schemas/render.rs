@@ -41,6 +41,21 @@ pub struct RenderOptions {
     #[oai(validator(minimum(value = "0.5"), maximum(value = "3.0")))]
     pub device_scale_factor: Option<f64>,
 
+    /// Custom delay after render ready (milliseconds)
+    /// Default: 500ms
+    #[oai(validator(minimum(value = "0"), maximum(value = "5000")))]
+    pub render_delay_ms: Option<u64>,
+
+    /// Polling interval for checking render status (milliseconds)
+    /// Default: 100ms
+    #[oai(validator(minimum(value = "50"), maximum(value = "1000")))]
+    pub poll_interval_ms: Option<u64>,
+
+    /// Maximum render timeout (milliseconds)
+    /// Default: 30000ms (30 seconds)
+    #[oai(validator(minimum(value = "1000"), maximum(value = "60000")))]
+    pub timeout_ms: Option<u64>,
+
     /// Return base64 encoded string instead of binary
     pub return_base64: Option<bool>,
 }

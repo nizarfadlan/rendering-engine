@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use crate::core::registry::LIBRARY_REGISTRY;
 use crate::core::template;
-use crate::schemas::render::{RenderRequest, Base64Response};
+use crate::schemas::render::{Base64Response, RenderRequest};
 
 struct TabGuard {
     tab: Arc<Tab>,
@@ -195,7 +195,8 @@ impl RenderingEngine {
         let mut attempts = 0;
         const MAX_ATTEMPTS: u32 = 50;
         const POLL_INTERVAL_MS: u64 = 100;
-        let poll_interval = Duration::from_millis(POLL_INTERVAL_MS);
+        let poll_interval =
+            Duration::from_millis(request.options.poll_interval_ms.unwrap_or(POLL_INTERVAL_MS));
 
         while attempts < MAX_ATTEMPTS {
             let ready: bool = tab
@@ -229,7 +230,8 @@ impl RenderingEngine {
             ));
         }
 
-        let render_delay = Duration::from_millis(POLL_INTERVAL_MS);
+        let render_delay =
+            Duration::from_millis(request.options.poll_interval_ms.unwrap_or(POLL_INTERVAL_MS));
         sleep(render_delay);
 
         Ok(())
@@ -255,9 +257,7 @@ impl RenderingEngine {
                     true,
                 )?
             }
-            "pdf" => {
-                tab.print_to_pdf(None)?
-            }
+            "pdf" => tab.print_to_pdf(None)?,
             _ => {
                 return Err(anyhow!("Unsupported format: {}", request.options.format));
             }
