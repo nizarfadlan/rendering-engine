@@ -1,15 +1,29 @@
 use anyhow::{Result, anyhow};
 use base64::{Engine as _, engine::general_purpose};
+use crossbeam::queue::ArrayQueue;
 use headless_chrome::Tab;
 use headless_chrome::{Browser, LaunchOptions, protocol::cdp::Page};
+use parking_lot::RwLock;
 use std::ffi::OsStr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread::sleep;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use tokio::sync::Semaphore;
 
 use crate::core::registry::LIBRARY_REGISTRY;
 use crate::core::template;
 use crate::schemas::render::{Base64Response, RenderRequest};
+
+const DEFAULT_POOL_SIZE: usize = 1;
+const MAX_CONCURRENT_RENDERS: usize = 20;
+
+#[derive(Debug, Clone)]
+pub struct HealthStatus {
+    pub pool_size: usize,
+    pub total_capacity: usize,
+    pub available_permits: usize,
+    pub max_concurrent: usize,
+}
 
 struct TabGuard {
     tab: Arc<Tab>,
@@ -35,14 +49,133 @@ impl Drop for TabGuard {
     }
 }
 
+struct BrowserInstance {
+    browser: Browser,
+    last_health_check: Arc<RwLock<Instant>>,
+}
+
+impl BrowserInstance {
+    fn new(launch_options: &LaunchOptions<'static>) -> Result<Self> {
+        let browser = Browser::new(launch_options.clone())?;
+        let now = Instant::now();
+
+        Ok(Self {
+            browser,
+            last_health_check: Arc::new(RwLock::new(now)),
+        })
+    }
+
+    fn is_healthy(&self) -> bool {
+        match self.browser.get_version() {
+            Ok(_) => {
+                *self.last_health_check.write() = Instant::now();
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    fn new_tab(&self) -> Result<Arc<Tab>> {
+        self.browser
+            .new_tab()
+            .map_err(|e| anyhow!("Failed to create tab: {}", e))
+    }
+}
+
+struct BrowserPoolGuard {
+    pool: Arc<BrowserPool>,
+    instance: Option<Arc<BrowserInstance>>,
+}
+
+impl Drop for BrowserPoolGuard {
+    fn drop(&mut self) {
+        if let Some(instance) = self.instance.take() {
+            self.pool.release(instance);
+        }
+    }
+}
+
+struct BrowserPool {
+    pool: ArrayQueue<Arc<BrowserInstance>>,
+    launch_options: LaunchOptions<'static>,
+    size: usize,
+}
+
+impl BrowserPool {
+    fn new(size: usize, launch_options: LaunchOptions<'static>) -> Result<Self> {
+        let pool = ArrayQueue::new(size);
+
+        // Pre-populate pool
+        for i in 0..size {
+            match BrowserInstance::new(&launch_options) {
+                Ok(instance) => {
+                    if pool.push(Arc::new(instance)).is_err() {
+                        tracing::error!("Failed to push browser {} to pool", i);
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Failed to create browser instance {}: {}", i, e);
+                }
+            }
+        }
+
+        if pool.len() == 0 {
+            return Err(anyhow!("Failed to initialize browser pool"));
+        }
+
+        tracing::info!(
+            "Browser pool initialized with {}/{} instances",
+            pool.len(),
+            size
+        );
+
+        Ok(Self {
+            pool,
+            launch_options,
+            size,
+        })
+    }
+
+    fn acquire(&self) -> Result<Arc<BrowserInstance>> {
+        if let Some(instance) = self.pool.pop() {
+            if instance.is_healthy() {
+                return Ok(instance);
+            } else {
+                tracing::warn!("Unhealthy browser detected, creating new instance");
+            }
+        }
+
+        tracing::debug!("Creating temporary browser instance (pool exhausted or unhealthy)");
+        BrowserInstance::new(&self.launch_options).map(Arc::new)
+    }
+
+    fn release(&self, instance: Arc<BrowserInstance>) {
+        if instance.is_healthy() {
+            if self.pool.push(instance).is_err() {
+                tracing::debug!("Pool full, dropping browser instance");
+            }
+        } else {
+            tracing::warn!("Not returning unhealthy instance to pool");
+        }
+    }
+
+    fn current_size(&self) -> usize {
+        self.pool.len()
+    }
+}
+
 #[derive(Clone)]
 pub struct RenderingEngine {
-    browser: Arc<Mutex<Option<Browser>>>,
-    launch_options: LaunchOptions<'static>,
+    browser_pool: Arc<BrowserPool>,
+    render_semaphore: Arc<Semaphore>,
 }
 
 impl RenderingEngine {
     pub fn new() -> Result<Self> {
+        Self::with_config(DEFAULT_POOL_SIZE, MAX_CONCURRENT_RENDERS)
+    }
+
+    pub fn with_config(pool_size: usize, max_concurrent: usize) -> Result<Self> {
         let launch_options = LaunchOptions::default_builder()
             .headless(true)
             .sandbox(false)
@@ -63,46 +196,48 @@ impl RenderingEngine {
             .build()
             .map_err(|_| anyhow!("Could not find Chrome/Chromium binary"))?;
 
-        let browser = Browser::new(launch_options.clone())?;
+        let browser_pool = BrowserPool::new(pool_size, launch_options)?;
+        let render_semaphore = Semaphore::new(max_concurrent);
 
         Ok(Self {
-            browser: Arc::new(Mutex::new(Some(browser))),
-            launch_options,
+            browser_pool: Arc::new(browser_pool),
+            render_semaphore: Arc::new(render_semaphore),
         })
     }
 
-    fn get_or_create_browser(&self) -> Result<Browser> {
-        let mut browser_lock = self.browser.lock().unwrap();
-
-        // Check if browser exists and is alive
-        if let Some(ref browser) = *browser_lock {
-            match browser.new_tab() {
-                Ok(tab) => {
-                    // Close test tab immediately
-                    let _ = tab.close(true);
-                    return Ok(browser.clone());
-                }
-                Err(_) => {
-                    tracing::warn!("Browser health check failed, recreating");
-                    *browser_lock = None;
-                }
-            }
-        }
-
-        // Browser is dead or doesn't exist, create new one
-        tracing::warn!("Browser crashed or not available, creating new instance");
-        let new_browser = Browser::new(self.launch_options.clone())?;
-        *browser_lock = Some(new_browser.clone());
-
-        Ok(new_browser)
-    }
-
     pub async fn render(&self, request: RenderRequest) -> Result<Vec<u8>> {
-        let engine = self.clone();
-
-        tokio::task::spawn_blocking(move || engine.render_sync(&request))
+        let _permit = self
+            .render_semaphore
+            .acquire()
             .await
-            .map_err(|e| anyhow!("Task join error: {}", e))?
+            .map_err(|_| anyhow!("Failed to acquire render permit"))?;
+
+        tracing::debug!(
+            "Render started - Available permits: {}/{}",
+            self.render_semaphore.available_permits(),
+            MAX_CONCURRENT_RENDERS
+        );
+
+        let library_name = request.library.name.clone();
+        let format = request.options.format.clone();
+
+
+        let engine = self.clone();
+        let start = Instant::now();
+
+        let result = tokio::task::spawn_blocking(move || engine.render_sync(&request))
+            .await
+            .map_err(|e| anyhow!("Task join error: {}", e))??;
+
+        let duration = start.elapsed();
+        tracing::info!(
+            "Render completed in {:?} - Library: {}, Format: {}",
+            duration,
+            library_name,
+            format
+        );
+
+        Ok(result)
     }
 
     pub async fn render_base64(&self, request: RenderRequest) -> Result<Base64Response> {
@@ -124,13 +259,14 @@ impl RenderingEngine {
     fn render_sync(&self, request: &RenderRequest) -> Result<Vec<u8>> {
         let html = template::generate_html(request)?;
 
-        let browser = self.get_or_create_browser().or_else(|e| {
-            tracing::warn!("First browser creation failed: {}, retrying...", e);
-            // Force clear and retry once
-            *self.browser.lock().unwrap() = None;
-            self.get_or_create_browser()
-        })?;
-        let tab = browser.new_tab()?;
+        let browser_instance = self.browser_pool.acquire()?;
+
+        let _pool_guard = BrowserPoolGuard {
+            pool: self.browser_pool.clone(),
+            instance: Some(browser_instance.clone()),
+        };
+
+        let tab = browser_instance.new_tab()?;
         let tab_guard = TabGuard::new(tab);
         let tab = tab_guard.as_ref();
 
@@ -264,5 +400,14 @@ impl RenderingEngine {
         };
 
         Ok(result)
+    }
+
+    pub fn health_check(&self) -> HealthStatus {
+        HealthStatus {
+            pool_size: self.browser_pool.current_size(),
+            total_capacity: self.browser_pool.size,
+            available_permits: self.render_semaphore.available_permits(),
+            max_concurrent: MAX_CONCURRENT_RENDERS,
+        }
     }
 }
